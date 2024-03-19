@@ -142,7 +142,7 @@ void ThrowException(JNIEnv *env, const char *exceptionName, DWORD dwError)
     if (res == 0) {
         strcpy(szMessage, "Unknown error");
     }
-
+    PP("error: %X, message: %s", dwError, szMessage)
     ThrowExceptionWithMessage(env, exceptionName, szMessage);
 }
 
@@ -515,6 +515,14 @@ JNIEXPORT void JNICALL Java_sun_security_mscapi_CKeyStore_loadKeysOrCertificateC
                 }
                 else
                 {
+#if 0
+                    DWORD buflen = 200;
+                    BYTE provbuf[200];
+                    BYTE contbuf[200];
+                    ::CryptGetProvParam(hCryptProv, PP_NAME, provbuf, &buflen, 0);
+                    ::CryptGetProvParam(hCryptProv, PP_CONTAINER, contbuf, &buflen, 0);
+                    PP("CAPI provider: %s, container: %s", provbuf, contbuf);
+#endif
                     if ((dwKeySpec & CERT_NCRYPT_KEY_SPEC) == CERT_NCRYPT_KEY_SPEC) {
                         PP("CNG %I64d", (__int64)hCryptProv);
                     } else {
@@ -757,6 +765,7 @@ JNIEXPORT jbyteArray JNICALL Java_sun_security_mscapi_CSignature_signHash
         // Acquire a hash object handle.
         if (::CryptCreateHash(HCRYPTPROV(hCryptProv), algId, 0, 0, &hHash) == FALSE) //deprecated
         {
+            auto createHashError = GetLastError();
             // Failover to using the PROV_RSA_AES CSP
 
             DWORD cbData = 256;
@@ -767,13 +776,23 @@ JNIEXPORT jbyteArray JNICALL Java_sun_security_mscapi_CSignature_signHash
             ::CryptGetProvParam((HCRYPTPROV)hCryptProv, PP_CONTAINER, //deprecated
                 (BYTE *)pbData, &cbData, 0);
 
+            PP("CryptCreateHash error: %X, will try PROV_RSA_AES container: %s", createHashError, LPCSTR(pbData))
+
             // Acquire an alternative CSP handle
             if (::CryptAcquireContext(&hCryptProvAlt, LPCSTR(pbData), NULL, //deprecated
                 PROV_RSA_AES, 0) == FALSE)
             {
+                auto error = GetLastError();
+                // If the keyset is in a machine store, we need to try again with CRYPT_MACHINE flag.
+                // See https ://learn.microsoft.com/en-us/troubleshoot/windows-server/windows-security/cryptacquirecontext-troubleshooting
+                PP("CryptAcquireContext error: %X, may try PROV_RSA_AES (CRYPT_MACHINE)", error)
+                if (error != NTE_BAD_KEYSET || ::CryptAcquireContext(&hCryptProvAlt, LPCSTR(pbData), NULL, //deprecated
+                    PROV_RSA_AES, CRYPT_MACHINE_KEYSET) == FALSE)
+                {
+                    ThrowException(env, SIGNATURE_EXCEPTION, GetLastError());
+                    __leave;
+                }
 
-                ThrowException(env, SIGNATURE_EXCEPTION, GetLastError());
-                __leave;
             }
 
             // Acquire a hash object handle.

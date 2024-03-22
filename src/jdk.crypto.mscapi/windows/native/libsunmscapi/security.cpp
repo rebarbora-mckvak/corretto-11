@@ -539,7 +539,7 @@ JNIEXPORT void JNICALL Java_sun_security_mscapi_CKeyStore_loadKeysOrCertificateC
                         // Set cipher mode to ECB
                         DWORD dwCipherMode = CRYPT_MODE_ECB;
                         ::CryptSetKeyParam(hUserKey, KP_MODE, (BYTE*)&dwCipherMode, NULL); //deprecated
-                        PP("CAPI %I64d %I64d", (__int64)hCryptProv, (__int64)hUserKey);
+                        PP("CAPI hCryptProv=%I64d hUserKey=%I64d", (__int64)hCryptProv, (__int64)hUserKey);
                     }
                     // If the private key is present in smart card, we may not be able to
                     // determine the key length by using the private key handle. However,
@@ -776,23 +776,18 @@ JNIEXPORT jbyteArray JNICALL Java_sun_security_mscapi_CSignature_signHash
             ::CryptGetProvParam((HCRYPTPROV)hCryptProv, PP_CONTAINER, //deprecated
                 (BYTE *)pbData, &cbData, 0);
 
-            PP("CryptCreateHash error: %X, will try PROV_RSA_AES container: %s", createHashError, LPCSTR(pbData))
+            DWORD keysetType;
+            ::CryptGetProvParam((HCRYPTPROV)hCryptProv, PP_KEYSET_TYPE, //deprecated
+                (BYTE*)&keysetType, &cbData, 0);
+
+            PP("CryptCreateHash error: %X (hCryptProv=%I64d, hCryptKey=%I64d), will try PROV_RSA_AES container: %s, keysetType=%X", createHashError, (__int64) hCryptProv, (__int64) hCryptKey, LPCSTR(pbData), keysetType)
 
             // Acquire an alternative CSP handle
             if (::CryptAcquireContext(&hCryptProvAlt, LPCSTR(pbData), NULL, //deprecated
-                PROV_RSA_AES, 0) == FALSE)
+                PROV_RSA_AES, 0 | keysetType) == FALSE)
             {
-                auto error = GetLastError();
-                // If the keyset is in a machine store, we need to try again with CRYPT_MACHINE flag.
-                // See https ://learn.microsoft.com/en-us/troubleshoot/windows-server/windows-security/cryptacquirecontext-troubleshooting
-                PP("CryptAcquireContext error: %X, may try PROV_RSA_AES (CRYPT_MACHINE)", error)
-                if (error != NTE_BAD_KEYSET || ::CryptAcquireContext(&hCryptProvAlt, LPCSTR(pbData), NULL, //deprecated
-                    PROV_RSA_AES, CRYPT_MACHINE_KEYSET) == FALSE)
-                {
-                    ThrowException(env, SIGNATURE_EXCEPTION, GetLastError());
-                    __leave;
-                }
-
+                ThrowException(env, SIGNATURE_EXCEPTION, GetLastError());
+                __leave;
             }
 
             // Acquire a hash object handle.
